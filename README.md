@@ -89,25 +89,51 @@ https://github.com/DustinWin/BestCF/releases/download/bestcf/<文件名>
 
 ## 常驻部署（systemd）
 
-程序内置循环，systemd 只需保证进程存活：
+程序内置循环，systemd 只需保证进程存活。以下步骤在你的 Linux 服务器上执行。
 
-```ini
-[Unit]
-Description=Cloudflare 优选 IP/域名 DDNS
-After=network.target
+1. 编译好的二进制传到服务器（在 Windows 上跨平台编译，再用 `scp` 走加密通道传输，配置文件包含真实 token 也建议用 `scp` 传，别用明文渠道）：
 
-[Service]
-ExecStart=/usr/local/bin/cf-ddns -config /etc/cf-ddns/config.json
-Restart=always
-RestartSec=5
+   ```bash
+   # 在开发机上（Windows 也可以，加上 GOOS/GOARCH）
+   GOOS=linux GOARCH=amd64 go build -o cf-ddns cf-ddns.go
+   scp cf-ddns config.json user@your-server:/tmp/
+   ```
 
-[Install]
-WantedBy=multi-user.target
-```
+2. 在服务器上把文件放到位：
 
-```bash
-go build -o cf-ddns cf-ddns.go
-sudo cp cf-ddns /usr/local/bin/
-sudo mkdir -p /etc/cf-ddns && sudo cp config.json /etc/cf-ddns/
-sudo systemctl enable --now cf-ddns
-```
+   ```bash
+   sudo cp /tmp/cf-ddns /usr/local/bin/
+   sudo mkdir -p /etc/cf-ddns
+   sudo cp /tmp/config.json /etc/cf-ddns/
+   ```
+
+3. 创建 systemd unit 文件：
+
+   ```bash
+   sudo vim /etc/systemd/system/cf-ddns.service
+   ```
+
+   按 `i` 进入插入模式，粘贴以下内容，`Esc` 后输入 `:wq` 保存退出：
+
+   ```ini
+   [Unit]
+   Description=Cloudflare 优选 IP/域名 DDNS
+   After=network.target
+
+   [Service]
+   ExecStart=/usr/local/bin/cf-ddns -config /etc/cf-ddns/config.json
+   Restart=always
+   RestartSec=5
+
+   [Install]
+   WantedBy=multi-user.target
+   ```
+
+4. 让 systemd 识别并启动：
+
+   ```bash
+   sudo systemctl daemon-reload
+   sudo systemctl enable --now cf-ddns
+   systemctl status cf-ddns      # 确认 active (running)
+   journalctl -u cf-ddns -f      # 看实时日志
+   ```
