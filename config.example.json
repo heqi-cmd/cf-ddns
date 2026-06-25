@@ -1,0 +1,12 @@
+{
+  "cf_token": "你的Cloudflare API Token",
+  "zone_id": "你的Zone ID",
+  "record": "cf.yourdomain.com",
+  "proxied": false,
+  "ttl": 60,
+  "interval": "10m",
+  "ips_url": "https://github.com/DustinWin/BestCF/releases/download/bestcf/cmcc-ip.txt",
+  "colo": "",
+  "task": 50,
+  "dry_run": false
+}
