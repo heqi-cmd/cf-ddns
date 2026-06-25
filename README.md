@@ -137,3 +137,11 @@ https://github.com/DustinWin/BestCF/releases/download/bestcf/<文件名>
    systemctl status cf-ddns      # 确认 active (running)
    journalctl -u cf-ddns -f      # 看实时日志
    ```
+
+## 致谢
+
+候选 IP/域名数据来自 [DustinWin/BestCF](https://github.com/DustinWin/BestCF)，该项目每 12 小时自动汇总多个测速源（CMLiussss、VPS789、微测网、CloudFlareYes、IPDB 等）生成优选列表。本项目只负责在此基础上做本地实测延迟筛选和 DNS 自动更新，感谢 BestCF 作者及上游各测速源的持续维护。
+
+## License
+
+[MIT](LICENSE)
