@@ -13,12 +13,14 @@ jobs:
 
     steps:
       - name: 检出代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: 准备 Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
+          # 项目零依赖，没有 go.sum，关掉模块缓存避免无谓的告警
+          cache: false
 
       - name: 检查格式
         run: |
@@ -49,12 +51,14 @@ jobs:
 
     steps:
       - name: 检出代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: 准备 Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
+          # 项目零依赖，没有 go.sum，关掉模块缓存避免无谓的告警
+          cache: false
 
       - name: 编译
         env:

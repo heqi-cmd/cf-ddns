@@ -22,15 +22,17 @@ jobs:
 
     steps:
       - name: 检出代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ inputs.tag || github.ref }}
           fetch-depth: 0
 
       - name: 准备 Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
+          # 项目零依赖，没有 go.sum，关掉模块缓存避免无谓的告警
+          cache: false
 
       - name: 静态检查与测试
         run: |
