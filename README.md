@@ -8,6 +8,8 @@
 
 移动、联通、电信用户访问同一个域名，各自解析到自己线路最快的 Cloudflare 节点
 
+[![CI](https://github.com/heqi-cmd/cf-ddns/actions/workflows/ci.yml/badge.svg)](https://github.com/heqi-cmd/cf-ddns/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/heqi-cmd/cf-ddns)](https://github.com/heqi-cmd/cf-ddns/releases/latest)
 ![Go](https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-blue)
 ![Platform](https://img.shields.io/badge/Platform-Linux%20|%20Windows%20|%20macOS-lightgrey)
@@ -125,6 +127,8 @@ cp config.example.json config.json
 ```
 
 ### 4. 构建与运行
+
+从 [Releases](https://github.com/heqi-cmd/cf-ddns/releases/latest) 下载对应平台的压缩包解压即用，或自行编译：
 
 ```bash
 go build -o cf-ddns .
@@ -309,6 +313,8 @@ cf-ddns/
 ```bash
 go test ./...
 ```
+
+推送到 `master` 与提交 PR 时，CI 会执行 gofmt 检查、`go vet`、race 测试并交叉编译多个平台；推送 `v*` 开头的 tag 会自动构建七个平台的二进制并发布到 Releases。
 
 ## 致谢
 
