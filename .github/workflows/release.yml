@@ -1,0 +1,102 @@
+name: Release
+
+# 推送 v* 开头的 tag 时自动交叉编译并发布到 Releases。
+# 也可在 Actions 页面手动触发，为一个已存在的 tag 补发。
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '要发布的 tag（须已存在于仓库）'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: 构建并发布
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - name: 准备 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: 静态检查与测试
+        run: |
+          go vet ./...
+          go test ./...
+
+      - name: 交叉编译并打包
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+
+          # GOOS GOARCH GOARM(- 表示不适用) 归档格式
+          while read -r goos goarch goarm fmt; do
+            [ -z "$goos" ] && continue
+
+            name="cf-ddns_${TAG}_${goos}_${goarch}"
+            [ "$goarm" != "-" ] && name="cf-ddns_${TAG}_${goos}_${goarch}v${goarm}"
+
+            bin="cf-ddns"
+            [ "$goos" = "windows" ] && bin="cf-ddns.exe"
+
+            mkdir -p "dist/$name"
+            env GOOS="$goos" GOARCH="$goarch" ${goarm:+GOARM=${goarm/-/}} CGO_ENABLED=0 \
+              go build -trimpath -ldflags="-s -w" -o "dist/$name/$bin" .
+
+            cp README.md LICENSE config.example.json config.cloudflare.example.json "dist/$name/"
+
+            ( cd dist
+              if [ "$fmt" = "zip" ]; then
+                zip -qr "$name.zip" "$name"
+              else
+                tar -czf "$name.tar.gz" "$name"
+              fi
+              rm -rf "$name" )
+
+            echo "  ✓ $name"
+          done <<'TARGETS'
+          linux amd64 - tar
+          linux arm64 - tar
+          linux arm 7 tar
+          windows amd64 - zip
+          windows arm64 - zip
+          darwin amd64 - tar
+          darwin arm64 - tar
+          TARGETS
+
+          ( cd dist && sha256sum ./*.tar.gz ./*.zip | sed 's|\./||' > checksums.txt )
+          ls -lh dist
+
+      - name: 发布到 Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          # 已存在同名 Release 时补传附件，避免手动触发重跑直接失败
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG 已存在，覆盖上传附件"
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" \
+              --title "$TAG" \
+              --generate-notes \
+              --verify-tag \
+              dist/*
+          fi

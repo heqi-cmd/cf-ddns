@@ -1,0 +1,8 @@
+# 仓库内一律以 LF 存储和检出。
+# Windows 上 core.autocrlf=true 会把工作区转成 CRLF，导致 CI 的 gofmt 检查
+# 把所有 Go 文件报成未格式化，这里显式固定行尾避免该问题。
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.ico binary
