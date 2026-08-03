@@ -1,12 +1,19 @@
 {
-  "cf_token": "你的Cloudflare API Token",
-  "zone_id": "你的Zone ID",
+  "provider": "dnspod",
+  "secret_id": "你的腾讯云SecretId",
+  "secret_key": "你的腾讯云SecretKey",
+  "domain": "yourdomain.com",
   "record": "cf.yourdomain.com",
-  "proxied": false,
-  "ttl": 60,
+  "ttl": 600,
   "interval": "10m",
-  "ips_url": "https://github.com/DustinWin/BestCF/releases/download/bestcf/cmcc-ip.txt",
-  "colo": "",
   "task": 50,
-  "dry_run": false
+  "colo": "",
+  "ipv6": true,
+  "dry_run": false,
+  "lines": [
+    { "line": "默认", "ips_url": "https://github.com/DustinWin/BestCF/releases/download/bestcf/bestcf-ip.txt" },
+    { "line": "移动", "ips_url": "https://github.com/DustinWin/BestCF/releases/download/bestcf/cmcc-ip.txt" },
+    { "line": "联通", "ips_url": "https://github.com/DustinWin/BestCF/releases/download/bestcf/cucc-ip.txt" },
+    { "line": "电信", "ips_url": "https://github.com/DustinWin/BestCF/releases/download/bestcf/ctcc-ip.txt" }
+  ]
 }
