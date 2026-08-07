@@ -1,325 +1,284 @@
-<div align="center">
-
-<img src="assets/logo.svg" width="112" alt="cf-ddns">
-
 # cf-ddns
 
-**按运营商线路优选 Cloudflare 节点的智能 DNS 更新器**
+> 按运营商线路优选 Cloudflare 节点 + 智能 DNS 更新 · 纯 Go 标准库 · 零依赖 · 单文件二进制
 
-移动、联通、电信用户访问同一个域名，各自解析到自己线路最快的 Cloudflare 节点
-
-[![CI](https://github.com/heqi-cmd/cf-ddns/actions/workflows/ci.yml/badge.svg)](https://github.com/heqi-cmd/cf-ddns/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/heqi-cmd/cf-ddns)](https://github.com/heqi-cmd/cf-ddns/releases/latest)
-![Go](https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go&logoColor=white)
-![License](https://img.shields.io/badge/License-MIT-blue)
-![Platform](https://img.shields.io/badge/Platform-Linux%20|%20Windows%20|%20macOS-lightgrey)
-![Dependencies](https://img.shields.io/badge/Dependencies-0-success)
-
-</div>
-
----
+![Go](https://img.shields.io/badge/Go-1.26%2B-168a46)
+![License](https://img.shields.io/badge/License-MIT-111111)
+![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20Windows%20%7C%20macOS-168a46)
+![Dependencies](https://img.shields.io/badge/Dependencies-Zero-168a46)
+![Single Binary](https://img.shields.io/badge/Single%20Binary-Yes-111111)
 
 ## 简介
 
-Cloudflare 的 anycast IP 在国内不同运营商下的实际质量差异很大：对移动最快的 IP，对电信可能很慢。常见做法是定期测速换 IP，但一条 DNS 记录只能有一个值，无论怎么优选都只能照顾一部分用户。
+cf-ddns 是「按运营商线路优选 Cloudflare 节点 + 智能 DNS 更新」工具：纯 Go 标准库实现，零依赖，编译后是单文件二进制，开箱即用。
 
-cf-ddns 把「优选」和「智能解析」结合起来：为每条运营商线路**分别**优选节点，再借助 DNSPod 的线路解析能力写入同一个域名的不同线路。用户无需做任何事，访问同一个域名即可落到各自网络的最优节点。
+Cloudflare anycast IP 在国内不同运营商下的质量差异很大——对移动最快的 IP，对电信可能很慢。常见做法是定期测速、更换 IP，但一条 DNS 记录只能有一个值。cf-ddns 为每条运营商线路（默认 / 移动 / 联通 / 电信）分别优选节点，再借助 DNSPod 的线路解析能力，把同一个域名写成不同线路的解析记录：移动 / 联通 / 电信用户访问同一个域名，各自解析到自己线路最快的节点。
 
-```
-                              ┌─ 移动用户 ──► 移动线路记录 ──► 移动优选 IP
-cf.example.com ──► DNSPod ────┼─ 联通用户 ──► 联通线路记录 ──► 联通优选 IP
-    同一个域名                 ├─ 电信用户 ──► 电信线路记录 ──► 电信优选 IP
-                              └─ 其他用户 ──► 默认线路记录 ──► 通用优选 IP
+## 工作原理
+
+```mermaid
+flowchart TD
+    U["cf.example.com<br/>同一个域名"] --> D{"DNSPod<br/>线路解析"}
+    D -->|移动用户| L1["移动线路记录"] --> I1["移动优选 IP"]
+    D -->|联通用户| L2["联通线路记录"] --> I2["联通优选 IP"]
+    D -->|电信用户| L3["电信线路记录"] --> I3["电信优选 IP"]
+    D -->|其他用户| L4["默认线路记录"] --> I4["通用优选 IP"]
 ```
 
 ## 特性
 
-- **分线路优选** — 默认 / 移动 / 联通 / 电信各自独立测速选优，互不影响
-- **双栈支持** — 同一线路可并存 A（IPv4）与 AAAA（IPv6）记录，各自独立优选
-- **智能类型识别** — 候选可以是 IPv4、IPv6 或域名，自动写成 A / AAAA / CNAME
-- **零依赖** — 纯 Go 标准库实现，含腾讯云 TC3 签名，单文件二进制，无需 CGO
-- **容错设计** — 单条线路失败不影响其它线路；无 IPv6 网络时自动跳过 AAAA
-- **幂等更新** — 结果与现有记录一致时不发起写请求，避免无谓的 API 调用
-- **向后兼容** — 保留原有 Cloudflare 单记录模式，旧配置文件无需修改
+- 纯 Go 标准库实现，零第三方依赖，单文件二进制
+- 按运营商线路（默认 / 移动 / 联通 / 电信）分别优选节点
+- 自动识别候选类型：IPv4 → A、IPv6 → AAAA、域名 → CNAME
+- 并发测速（默认 50 协程），同一轮内共享缓存，重复地址只测一次
+- 幂等收敛：无则创建、一致则跳过、不同则更新，不做破坏性删除
+- 支持 DNSPod 分线路解析与 Cloudflare 单记录兼容模式
+- 跨平台（Linux / Windows / macOS），Go 1.26+
 
-## 工作原理
+## 核心工作流
 
-1. **拉取候选** — 对每条线路，从 [BestCF](https://github.com/DustinWin/BestCF) 获取该运营商对应的优选列表（上游每 12 小时汇总全国多个测速源更新）
-2. **解析识别** — 逐行判断类型：IPv4 → `A`，IPv6 → `AAAA`（需开启 `ipv6`），域名 → `CNAME`
-3. **并发探测** — 对候选发起 TCP 建连（80 端口）+ HTTP 请求，确认存活并从 `CF-RAY` 响应头提取数据中心代码（如 `HKG`）。同一轮内多条线路共享测速缓存，重复地址只测一次
-4. **分槽位选优** — IPv4/域名候选竞争主槽位（一条 A 或 CNAME），IPv6 候选竞争 v6 槽位（一条 AAAA），按 `pick` 策略择优
-5. **收敛记录** — 与线上现有记录比对，不同则创建/更新，相同则跳过
-6. **循环** — 所有线路处理完毕后休眠 `interval`，重复上述流程
+每轮循环对所有线路执行以下 6 步；所有线路处理完毕后休眠 `interval`（默认 10 分钟）再开始下一轮，单条线路失败不影响其它线路。
 
-### 选优策略
+1. **拉取候选** — 对每条线路从 BestCF 获取该运营商对应的优选列表（`IP#备注` 格式，每行一个；可带端口；IPv6 用方括号）。
+2. **类型识别** — 自动判断每行：IPv4 → A 记录、IPv6 → AAAA 记录（需开启 `ipv6`）、域名 → CNAME 记录；去重并忽略无法识别的条目。
+3. **并发测速** — `task`（默认 50 协程）并发：TCP:80 建连 + HTTP GET，确认存活并从 CF-RAY 响应头提取数据中心代码（如 `HKG`）；同一轮内多条线路共享测速缓存，重复地址只测一次；建连超时 1s、探测上限 2s。
+4. **分槽位选优** — 主槽位由 IPv4 / 域名候选竞争一条 A 或 CNAME 记录（二者互斥），v6 槽位由 IPv6 候选竞争一条 AAAA 记录；可先按 `colo` 数据中心过滤。
+5. **收敛记录** — 与线上现有记录比对：无记录则创建、一致则跳过（幂等）、不同则更新；CNAME 与 AAAA 互斥（CNAME 目标域名自带双栈解析，主记录为 CNAME 时跳过 AAAA 维护）；若线路上残留冲突 AAAA 记录则提示手动清理，不做破坏性删除。
+6. **循环** — 所有线路处理完毕后休眠 `interval`（默认 `10m`）重复上述流程；单条线路失败不影响其它线路。
 
-| `pick` | 行为 | 适用场景 |
-|---|---|---|
-| `order`（默认） | 本机测速仅用于存活过滤，在存活候选中取 BestCF 列表排名最靠前的 | **跨运营商线路**。程序跑在电信机器上时，它实测的「移动线路延迟」没有参考价值，应信任 BestCF 的全国多点测速排名 |
-| `latency` | 取本机实测建连延迟最低的 | 程序部署在与该线路**相同**运营商的网络中，例如电信家宽服务器可给「电信」线路配 `latency` |
+## 选优策略
 
-### 记录类型规则
-
-A 与 AAAA 可在同一线路共存，CNAME 则与两者互斥。因此当某线路的最优结果是域名（CNAME）时，工具不再维护该线路的 AAAA —— CNAME 目标域名本身已自带双栈解析。若线路上残留旧 AAAA 记录会与 CNAME 冲突，工具会跳过写入并提示手动清理，不做破坏性删除。
+| 策略 | 选择方式 | 适用场景 |
+| --- | --- | --- |
+| `order`（默认） | 本机测速仅用于存活过滤，在存活候选中取 BestCF 列表排名最靠前的 | 跨运营商线路：程序跑在电信机器上时，实测的移动线路延迟没有参考价值，应信任 BestCF 的全国多点测速排名 |
+| `latency` | 取本机实测建连延迟最低的候选 | 程序部署在与该线路相同运营商的网络中，本机测速结果可信 |
 
 ## 快速开始
 
-### 1. 准备域名
+### 1. 准备域名：托管到 DNSPod
 
-Cloudflare DNS 没有「运营商线路」维度，无法按访问者运营商返回不同记录，因此承载优选记录的域名需托管到 [DNSPod](https://www.dnspod.cn/)（免费套餐即支持移动/联通/电信线路）。
+Cloudflare DNS 没有运营商线路维度，承载优选记录的域名需托管到 DNSPod（免费套餐即可）。两种方案任选其一：
 
-> **这个域名不需要留在 Cloudflare。** 优选记录只是把一个名字指向 Cloudflare 边缘 IP，真正被访问的 CF 站点（Workers / Pages / 自建反代等）使用它自己的域名和 SNI，两者互不影响。
+- **方案 A · 整域托管**：把域名的 NS 记录改为 DNSPod 提供的 `f1g1ns1.dnspod.net`，整域迁入 DNSPod。
+- **方案 B · 子域名委派**：域名保留在 Cloudflare，为承载优选记录的子域名（如 `cf.example.com`）添加 NS 记录，指向 DNSPod。
 
-按主域名是否需要保留在 Cloudflare，二选一：
-
-<table>
-<tr><th>方案</th><th>做法</th><th>适用</th></tr>
-<tr>
-<td><b>整域托管</b></td>
-<td>在 <a href="https://console.dnspod.cn/">DNSPod 控制台</a>添加域名，到注册商处把 NS 改为 DNSPod 分配的服务器（形如 <code>f1g1ns1.dnspod.net</code>）</td>
-<td>域名可以整体迁走</td>
-</tr>
-<tr>
-<td><b>子域名委派</b></td>
-<td>把子域名（如 <code>opt.example.com</code>）作为独立域名添加到 DNSPod，再到 Cloudflare 为该子域添加 NS 记录指向 DNSPod</td>
-<td>主域名需保留 Cloudflare 的 CDN / 防护</td>
-</tr>
-</table>
-
-用以下命令确认委派生效（应返回 DNSPod 的服务器）：
+验证：
 
 ```bash
-nslookup -type=NS opt.example.com 1.1.1.1
+nslookup -type=NS 你的域名   # 应返回 DNSPod 的 NS 记录
 ```
 
-### 2. 获取 API 密钥
+### 2. 获取腾讯云密钥
 
-DNSPod 已并入腾讯云，API 使用腾讯云密钥：
+腾讯云控制台 → 访问管理 → API 密钥管理，创建密钥。建议使用子账号并仅授权 `QcloudDNSPodFullAccess`，避免主账号密钥泄露造成过大影响。
 
-1. 打开[访问管理 → API 密钥管理](https://console.cloud.tencent.com/cam/capi)，新建密钥并立即保存
-2. **建议使用子账号**：访问管理 → 用户 → 新建子用户，仅勾选编程访问，策略只授予 `QcloudDNSPodFullAccess`
-
-### 3. 配置
+### 3. 写配置
 
 ```bash
 cp config.example.json config.json
 ```
 
-配置文件须为 **UTF-8 编码**（线路名是中文）。`config.json` 已在 `.gitignore` 中排除，不会被提交。
+> **注意**：配置文件必须为 UTF-8 编码——线路名是中文，切勿用 GBK / ANSI 保存。
 
-```json
-{
-  "provider": "dnspod",
-  "secret_id": "你的腾讯云SecretId",
-  "secret_key": "你的腾讯云SecretKey",
-  "domain": "example.com",
-  "record": "cf.example.com",
-  "ttl": 600,
-  "interval": "10m",
-  "ipv6": true,
-  "lines": [
-    { "line": "默认", "ips_url": ".../bestcf-ip.txt" },
-    { "line": "移动", "ips_url": ".../cmcc-ip.txt" },
-    { "line": "联通", "ips_url": ".../cucc-ip.txt" },
-    { "line": "电信", "ips_url": ".../ctcc-ip.txt" }
-  ]
-}
-```
-
-### 4. 构建与运行
-
-从 [Releases](https://github.com/heqi-cmd/cf-ddns/releases/latest) 下载对应平台的压缩包解压即用，或自行编译：
+### 4. 构建并试运行
 
 ```bash
 go build -o cf-ddns .
-```
-
-先做一次不写 DNS 的测试：
-
-```bash
-./cf-ddns -config config.json -dry-run
-```
-
-确认各线路都能选出结果后正式运行：
-
-```bash
-./cf-ddns -config config.json
+./cf-ddns -config config.json -dry-run   # 仅测速，不写 DNS
+./cf-ddns -config config.json            # 正式运行
 ```
 
 ## 配置参考
 
+### JSON 示例（dnspod 分线路模式）
+
+```json
+{
+  "provider": "dnspod",
+  "record": "cf.example.com",
+  "ttl": 600,
+  "interval": "10m",
+  "task": 50,
+  "colo": "HKG,NRT",
+  "ipv6": true,
+  "dry_run": false,
+  "secret_id": "AKID…",
+  "secret_key": "…",
+  "domain": "example.com",
+  "lines": [
+    { "line": "默认", "ips_url": "https://github.com/DustinWin/BestCF/releases/download/bestcf/bestcf-ip.txt", "pick": "order" },
+    { "line": "移动", "ips_url": "https://github.com/DustinWin/BestCF/releases/download/bestcf/cmcc-ip.txt", "pick": "order", "colo": "HKG,NRT" },
+    { "line": "联通", "ips_url": "https://github.com/DustinWin/BestCF/releases/download/bestcf/cucc-ip.txt", "pick": "latency" },
+    { "line": "电信", "ips_url": "https://github.com/DustinWin/BestCF/releases/download/bestcf/ctcc-ip.txt", "pick": "order" }
+  ]
+}
+```
+
 ### 通用字段
 
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `provider` | string | `dnspod`（智能分线路解析）或 `cloudflare`（单记录模式）。**缺省为 `cloudflare`**，以保证旧配置行为不变 |
-| `record` | string | 要维护的完整记录名，如 `cf.example.com` |
-| `ttl` | int | 记录 TTL（秒）。缺省按服务商取值：dnspod `600`（免费套餐下限）、cloudflare `60` |
-| `interval` | string | 扫描 + 更新间隔，Go duration 格式，如 `"10m"` |
-| `task` | int | 并发测速协程数，默认 `50` |
-| `colo` | string | 全局数据中心过滤，逗号分隔，如 `"HKG,SJC"`；留空不过滤 |
-| `ipv6` | bool | 是否同时优选 IPv6 并维护 AAAA 记录，默认 `false`。需本机具备 IPv6 连通性——否则 IPv6 候选会全部探测失败，工具自动跳过，不影响 IPv4 |
-| `dry_run` | bool | `true` 时仅测速打印结果，不写 DNS（可不填密钥） |
-| `lines` | array | 线路数组，见下 |
+| 字段 | 类型 | 默认 | 说明 |
+| --- | --- | --- | --- |
+| `provider` | string | `cloudflare` | `dnspod`：分线路模式；`cloudflare`：单记录兼容模式 |
+| `record` | string | — | 完整记录名，如 `cf.example.com` |
+| `ttl` | int | dnspod 600 / cloudflare 60 | DNS TTL |
+| `interval` | string | `"10m"` | Go duration 格式，一轮循环的休眠时长 |
+| `task` | int | `50` | 并发测速协程数 |
+| `colo` | string | 空 | 全局数据中心过滤，逗号分隔（如 `HKG,NRT`） |
+| `ipv6` | bool | `false` | 是否优选 IPv6 并维护 AAAA 记录；需本机具备 IPv6 连通 |
+| `dry_run` | bool | `false` | 仅测速并输出结果，不写 DNS |
 
-### `lines` 元素
+### lines 元素
 
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `line` | string | 线路名，须与 DNSPod 一致：`默认` / `移动` / `联通` / `电信` |
-| `ips_url` | string | 该线路的候选列表地址 |
-| `pick` | string | 选优策略 `order`（默认）/ `latency` |
-| `colo` | string | 本线路的数据中心过滤，缺省继承全局 `colo` |
+| 字段 | 类型 | 默认 | 说明 |
+| --- | --- | --- | --- |
+| `line` | string | 必填 | 线路名：`默认` / `移动` / `联通` / `电信`，须与 DNSPod 一致 |
+| `ips_url` | string | 必填 | 候选列表地址（BestCF 下载） |
+| `pick` | string | `order` | `order`（信任 BestCF 排名）或 `latency`（本机实测最低） |
+| `colo` | string | 继承全局 | 线路级数据中心过滤，缺省继承全局 `colo` |
 
-### 服务商专属字段
+### 服务商专属
 
-| 字段 | 适用 | 说明 |
-|---|---|---|
-| `secret_id` / `secret_key` | dnspod | 腾讯云 API 密钥 |
-| `domain` | dnspod | DNSPod 中的主域名，`record` 必须等于它或是其子域名 |
-| `cf_token` / `zone_id` | cloudflare | Cloudflare API Token 与 Zone ID |
-| `proxied` | cloudflare | 是否开启代理（小黄云）。直连优选节点场景应为 `false` |
+| provider | 字段 | 类型 | 说明 |
+| --- | --- | --- | --- |
+| `dnspod` | `secret_id` / `secret_key` / `domain` | string | 腾讯云 API 密钥与域名（如 `example.com`） |
+| `cloudflare` | `cf_token` / `zone_id` | string | API Token（需 Zone→DNS→Edit 权限）与 Zone ID（域名 Overview 页右下角） |
+| `cloudflare` | `proxied` | bool | 是否开启代理（小黄云）；直连优选场景应为 `false` |
 
 ### 候选列表地址
 
-BestCF 按运营商提供不同文件，完整地址形如 `https://github.com/DustinWin/BestCF/releases/download/bestcf/<文件名>`：
+| 线路 | 文件名 |
+| --- | --- |
+| 默认 / 通用 | `bestcf-ip.txt` |
+| 移动 | `cmcc-ip.txt` |
+| 联通 | `cucc-ip.txt` |
+| 电信 | `ctcc-ip.txt` |
+| 优选域名（CNAME） | `bestcf-domain.txt` |
 
-| 文件 | 适用线路 |
-|---|---|
-| `bestcf-ip.txt` | 默认（通用） |
-| `cmcc-ip.txt` | 移动 |
-| `cucc-ip.txt` | 联通 |
-| `ctcc-ip.txt` | 电信 |
-| `bestcf-domain.txt` | 优选域名（写 CNAME） |
+完整地址形如：
 
-IP 列表内混有 IPv4 与 IPv6 条目，开启 `ipv6` 后两者都会参与优选，各自写入对应记录。
-
-### 命令行参数
-
-分线路解析仅支持配置文件方式。命令行参数用于 cloudflare 单记录模式，或临时覆盖配置：
-
-```bash
-./cf-ddns -cf-token "xxx" -zone-id "xxx" -record "cf.example.com"
-./cf-ddns -config config.json -dry-run     # 覆盖配置中的 dry_run
-./cf-ddns -config config.json -ipv6        # 覆盖配置中的 ipv6
+```
+https://github.com/DustinWin/BestCF/releases/download/bestcf/<文件名>
 ```
 
-完整参数见 `./cf-ddns -h`。
+## 命令行参数
 
-## 验证
+| 参数 | 说明 |
+| --- | --- |
+| `-config` | 配置文件路径 |
+| `-cf-token` | Cloudflare API Token |
+| `-zone-id` | Cloudflare Zone ID |
+| `-record` | 完整记录名 |
+| `-proxied` | 是否开启代理（小黄云） |
+| `-ttl` | TTL |
+| `-interval` | 循环间隔（Go duration，如 `"10m"`） |
+| `-ips-url` | 候选列表地址 |
+| `-colo` | 数据中心过滤（逗号分隔） |
+| `-task` | 并发测速协程数 |
+| `-ipv6` | 启用 IPv6 优选 |
+| `-dry-run` | 仅测速，不写 DNS |
 
-程序运行后，可从 DNSPod 权威服务器按不同运营商网段查询，确认各线路返回不同结果：
+`-dry-run` 与 `-ipv6` 在显式传入时会覆盖配置文件中的对应值。
 
-- **在线工具** — [itdog.cn/dns](https://www.itdog.cn/dns/) 从各地真实节点发起查询，能直观看到三网差异
-- **本机查询** — `nslookup cf.example.com` 返回的是你当前宽带运营商线路的结果
+## 部署（systemd）
 
-> **注意**：用 `nslookup` 指定其它运营商的公共 DNS 来验证往往不可靠——这类查询容易在路径上被拦截或改道，无法把真实的运营商信息传递到权威服务器，导致所有线路都返回默认值。请以多点测试工具的结果为准。
-
-智能解析依据递归解析器的出口 IP（或 EDNS Client Subnet）判断运营商。若用户手动将 DNS 设为某些公共解析器，可能落到默认线路——这是智能解析的固有特性。
-
-## 部署
-
-程序内置循环，systemd 只需保证进程存活。
-
-**1. 交叉编译并传输**（配置文件含密钥，务必走 `scp` 等加密通道）：
+### 交叉编译与传输
 
 ```bash
 GOOS=linux GOARCH=amd64 go build -o cf-ddns .
-scp cf-ddns config.json user@your-server:/tmp/
+scp cf-ddns config.json user@server:/tmp/   # 含密钥，务必走加密通道
+sudo install -m 0755 /tmp/cf-ddns /usr/local/bin/cf-ddns
+sudo mkdir -p /etc/cf-ddns
+sudo install -m 600 /tmp/config.json /etc/cf-ddns/config.json
 ```
 
-**2. 在服务器上就位**：
+### systemd unit
 
-```bash
-sudo cp /tmp/cf-ddns /usr/local/bin/
-sudo mkdir -p /etc/cf-ddns && sudo cp /tmp/config.json /etc/cf-ddns/
-sudo chmod 600 /etc/cf-ddns/config.json
-```
-
-**3. 创建 systemd unit**：
-
-```bash
-sudo tee /etc/systemd/system/cf-ddns.service > /dev/null <<'EOF'
+```ini
 [Unit]
-Description=Cloudflare 分线路优选 DDNS
+Description=cf-ddns Cloudflare 优选 IP 动态 DNS
 After=network-online.target
 Wants=network-online.target
 
 [Service]
+Type=simple
 ExecStart=/usr/local/bin/cf-ddns -config /etc/cf-ddns/config.json
 Restart=always
-RestartSec=5
-NoNewPrivileges=true
+RestartSec=10
 ProtectSystem=strict
-ProtectHome=true
+ProtectHome=read-only
+NoNewPrivileges=true
 PrivateTmp=true
 
 [Install]
 WantedBy=multi-user.target
-EOF
 ```
 
-**4. 启动并检查**：
+### 启用并查看日志
 
 ```bash
+sudo cp cf-ddns.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now cf-ddns
-systemctl status cf-ddns      # 确认 active (running)
-journalctl -u cf-ddns -f      # 实时日志
+journalctl -u cf-ddns -f
 ```
+
+## 验证方法
+
+- **在线多点测试**：在 [itdog.cn/dns](https://itdog.cn/dns) 输入域名做多点 DNS 解析，三网差异一目了然。
+- **本机解析**：`nslookup cf.example.com` 应返回当前宽带运营商线路的解析结果。
+
+> **注意**：不要指定其它运营商的公共 DNS 来「验证」——由于 EDNS 与出口 IP 拦截问题，其结果不可靠，不能代表目标线路的真实解析。
 
 ## 常见问题
 
-**日志显示「无存活 IPv6 候选」**
-运行程序的机器没有 IPv6 出口，IPv6 候选全部探测失败。这不影响 IPv4，工具会自动跳过 AAAA。确认服务器 IPv6 可用后重试：`curl -6 https://ip.sb`。
+### 提示「无存活 IPv6 候选」，怎么办？
 
-**提示 TTL 低于下限**
-DNSPod 免费套餐的最小 TTL 是 600 秒，配置更低的值会被 API 拒绝。
+本机没有 IPv6 出口所致，不影响 IPv4 线路，工具会自动跳过 AAAA 记录的维护。可用 `curl -6 https://ip.sb` 验证本机是否具备 IPv6 连通性。
 
-**某条线路写入失败，提示需要默认线路**
-DNSPod 要求记录名下先存在默认线路记录，才允许添加其它线路。工具已自动将「默认」线路排在最前处理，因此保留默认线路配置即可。
+### 提示 TTL 低于下限？
 
-**从配置中删除了某条线路**
-线上已写入的该线路记录**不会**被自动删除，需到 DNSPod 控制台手动清理。
+DNSPod 免费套餐的最小 TTL 为 600，把 `ttl` 调到 600 及以上即可。
 
-**cloudflare 模式启动报错，提示不支持线路**
-Cloudflare DNS 不支持按运营商解析。分线路需将 `provider` 改为 `dnspod` 并按上文完成域名托管。
+### 写入失败提示需要「默认」线路？
 
-## 兼容模式
+DNSPod 要求记录名下先存在「默认」线路的记录。工具已自动把「默认」线路排到处理最前，正常流程下无需手动干预。
 
-不需要分线路时，可继续使用 Cloudflare 单记录模式（示例见 `config.cloudflare.example.json`）。旧版配置文件无需任何修改即可继续运行，选优保持原有的 `latency` 行为。
+### 从配置里删掉了某条线路，线上记录还在？
 
-Token 与 Zone ID 获取方式：
+工具只收敛自身维护的记录，不会自动删除已存在的线上记录。删除线路后需到 DNSPod 控制台手动清理残留记录。
 
-1. 打开 [API Tokens](https://dash.cloudflare.com/profile/api-tokens) → **Create Token** → **Create Custom Token**
-2. 权限选择 `Zone` → `DNS` → `Edit`，Zone Resources 仅包含目标域名
-3. **Zone ID** 位于 Cloudflare 后台对应域名的 Overview 页面右下角
+### cloudflare 模式提示不支持线路？
 
-该模式下配置「默认」以外的线路会在启动时报错。
+Cloudflare DNS 不支持按运营商线路解析，请改用 `dnspod` 模式，并把域名托管到 DNSPod（见「快速开始」）。
 
-## 代码结构
+## 兼容模式（Cloudflare 单记录）
 
-```
-cf-ddns/
-├── main.go            # 主流程：参数解析、循环、按线路分槽位编排
-├── config.go          # 配置定义、加载与校验
-└── internal/
-    ├── probe/         # 候选拉取、解析、并发测速、选优
-    └── dns/           # DNS 服务商抽象及 cloudflare / dnspod 实现
-```
+`provider=cloudflare` 是「单记录模式」：不需要分线路时的旧版行为，旧配置无需任何修改即可继续使用。要点：
 
-运行测试：
+- 仅允许 `默认` 线路，不维护运营商多线路。
+- TTL 默认 `60`。
+- Token 需 Zone→DNS→Edit 权限；Zone ID 在域名 Overview 页右下角。
+- 直连优选场景下 `proxied` 应为 `false`。
 
-```bash
-go test ./...
+```json
+{
+  "provider": "cloudflare",
+  "record": "cf.example.com",
+  "ttl": 60,
+  "cf_token": "…",
+  "zone_id": "…",
+  "proxied": false
+}
 ```
 
-推送到 `master` 与提交 PR 时，CI 会执行 gofmt 检查、`go vet`、race 测试并交叉编译多个平台；推送 `v*` 开头的 tag 会自动构建七个平台的二进制并发布到 Releases。
+## 文档
+
+完整中文使用说明书（含架构图与流程图 SVG）见 [cf-ddns-manual.html](cf-ddns-manual.html)。
 
 ## 致谢
 
-候选 IP / 域名数据来自 [DustinWin/BestCF](https://github.com/DustinWin/BestCF)，该项目每 12 小时自动汇总多个测速源（CMLiussss、VPS789、微测网、CloudFlareYes、IPDB 等）生成按运营商区分的优选列表。本项目在此基础上做本地存活筛选与分线路 DNS 自动更新，感谢 BestCF 作者及上游各测速源的持续维护。
+候选数据来自 [DustinWin/BestCF](https://github.com/DustinWin/BestCF)：每 12 小时汇总多个测速源，提供各运营商优选列表。
 
 ## License
 
-[MIT](LICENSE)
+MIT
