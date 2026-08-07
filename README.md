@@ -273,7 +273,7 @@ Cloudflare DNS 不支持按运营商线路解析，请改用 `dnspod` 模式，�
 
 ## 文档
 
-完整中文使用说明书（含架构图与流程图 SVG）见 [cf-ddns-manual.html](cf-ddns-manual.html)。
+完整中文使用说明书（含架构图与流程图 SVG）见 <https://cf-ddns.mancitysun.top/>。
 
 ## 致谢
 
