@@ -2,6 +2,7 @@
 package dns
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -23,34 +24,77 @@ type Provider interface {
 	Update(id, line, recordType, content string) error
 }
 
+// FormatRecordChange 计算把既有记录 prev 收敛到 nextType/nextContent 的动作：
+// 返回是否需要写入，以及用于日志的中文摘要（创建 / 无需更新 / 更新）。
+func FormatRecordChange(prev *Record, nextType, nextContent string) (bool, string) {
+	normType := strings.ToUpper(strings.TrimSpace(nextType))
+	normContent := cleanRecordContent(normType, nextContent)
+	if prev == nil {
+		return true, fmt.Sprintf("已创建记录 %s %s", normType, normContent)
+	}
+	if strings.EqualFold(prev.Type, normType) && sameRecordContent(prev.Content, normContent) {
+		return false, fmt.Sprintf("最优结果与当前记录一致 (%s %s)，无需更新", normType, normContent)
+	}
+	return true, fmt.Sprintf("已更新记录 %s %s -> %s %s", prev.Type, cleanRecordContent(prev.Type, prev.Content), normType, normContent)
+}
+
 // EnsureRecord 把 line 线路上类型属于 queryTypes 的记录收敛到 recordType/content，返回动作描述用于日志。
 // 主槽位用 queryTypes=[A, CNAME]（二者互斥、共用一个槽位），v6 槽位用 [AAAA]
 func EnsureRecord(p Provider, line string, queryTypes []string, recordType, content string) (string, error) {
+	normType := strings.ToUpper(strings.TrimSpace(recordType))
+	if normType == "" {
+		return "", errors.New("recordType 不能为空")
+	}
+	normContent := cleanRecordContent(normType, content)
+	if normContent == "" {
+		return "", errors.New("记录内容不能为空")
+	}
+
 	cur, err := p.Get(line, queryTypes)
 	if err != nil {
 		return "", fmt.Errorf("查询当前 DNS 记录失败: %v", err)
 	}
 
+	changed, summary := FormatRecordChange(cur, normType, normContent)
+	if !changed {
+		return summary, nil
+	}
+
 	if cur == nil {
-		if err := p.Create(line, recordType, content); err != nil {
+		if err := p.Create(line, normType, normContent); err != nil {
 			return "", fmt.Errorf("创建 DNS 记录失败: %v", err)
 		}
-		return fmt.Sprintf("已创建记录 %s %s", recordType, content), nil
+		return summary, nil
 	}
 
-	if cur.Type == recordType && sameRecordContent(cur.Content, content) {
-		return fmt.Sprintf("最优结果与当前记录一致 (%s %s)，无需更新", cur.Type, content), nil
+	if strings.TrimSpace(cur.ID) == "" {
+		return "", fmt.Errorf("更新 DNS 记录失败: 线路 %s 的现有记录缺少 id，无法更新", line)
 	}
 
-	if err := p.Update(cur.ID, line, recordType, content); err != nil {
+	if err := p.Update(cur.ID, line, normType, normContent); err != nil {
 		return "", fmt.Errorf("更新 DNS 记录失败: %v", err)
 	}
-	return fmt.Sprintf("已更新记录 %s %s -> %s %s", cur.Type, cur.Content, recordType, content), nil
+	return summary, nil
 }
 
-// sameRecordContent 比较记录值是否等价（忽略大小写和 DNSPod 返回 CNAME 值时携带的末尾点）
+// cleanRecordContent 清洗记录内容：首尾空白 trim，CNAME 额外去除末尾的点
+func cleanRecordContent(recordType, content string) string {
+	val := strings.TrimSpace(content)
+	if strings.EqualFold(recordType, "CNAME") {
+		val = strings.TrimRight(val, ".")
+		val = strings.TrimSpace(val)
+	}
+	return val
+}
+
+// sameRecordContent 比较记录值是否等价（忽略首尾空白、大小写和 CNAME 值的末尾点）
 func sameRecordContent(a, b string) bool {
-	return strings.EqualFold(strings.TrimSuffix(a, "."), strings.TrimSuffix(b, "."))
+	return strings.EqualFold(trimRecordValue(a), trimRecordValue(b))
+}
+
+// trimRecordValue 去掉首尾空白和末尾的点，用于记录值的等价比较
+func trimRecordValue(s string) string {
+	return strings.TrimRight(strings.TrimSpace(s), ".")
 }
 
 func typeIn(t string, types []string) bool {

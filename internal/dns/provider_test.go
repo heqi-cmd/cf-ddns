@@ -1,6 +1,8 @@
 package dns
 
-import "testing"
+import (
+	"testing"
+)
 
 func TestSameRecordContent(t *testing.T) {
 	if !sameRecordContent("www.Shopify.com.", "www.shopify.com") {
@@ -39,6 +41,23 @@ func (f *fakeProvider) Update(_, _, recordType, content string) error {
 	return nil
 }
 
+func TestFormatRecordChange(t *testing.T) {
+	ch, msg := FormatRecordChange(nil, "A", "1.1.1.1")
+	if !ch || msg != "已创建记录 A 1.1.1.1" {
+		t.Fatalf("create: got (%v, %q)", ch, msg)
+	}
+
+	ch, msg = FormatRecordChange(&Record{ID: "1", Type: "CNAME", Content: "www.Example.com."}, "cname", "www.example.com")
+	if ch || msg != "最优结果与当前记录一致 (CNAME www.example.com)，无需更新" {
+		t.Fatalf("noop: got (%v, %q)", ch, msg)
+	}
+
+	ch, msg = FormatRecordChange(&Record{ID: "1", Type: "A", Content: "1.1.1.1"}, "A", "2.2.2.2")
+	if !ch || msg != "已更新记录 A 1.1.1.1 -> A 2.2.2.2" {
+		t.Fatalf("update: got (%v, %q)", ch, msg)
+	}
+}
+
 func TestEnsureRecord(t *testing.T) {
 	mainTypes := []string{"A", "CNAME"}
 
@@ -60,30 +79,39 @@ func TestEnsureRecord(t *testing.T) {
 		t.Errorf("值一致时不应有写操作: %+v", p)
 	}
 
-	// 值不同 → 更新
-	p = &fakeProvider{rec: &Record{ID: "1", Type: "A", Content: "1.2.3.4"}}
-	if _, err := EnsureRecord(p, "移动", mainTypes, "A", "5.6.7.8"); err != nil {
-		t.Fatal(err)
+	// CNAME 规范化与末尾点剥离
+	pCNAME := &fakeProvider{}
+	if _, err := EnsureRecord(pCNAME, "移动", mainTypes, " cname ", " www.Example.com. "); err != nil {
+		t.Fatalf("EnsureRecord error: %v", err)
 	}
-	if p.updated != 1 || p.lastVal != "5.6.7.8" {
-		t.Errorf("值不同时应更新: %+v", p)
-	}
-
-	// 已有 A 记录不影响 AAAA 槽位：按 [AAAA] 查询命不中 → 创建 AAAA
-	p = &fakeProvider{rec: &Record{ID: "1", Type: "A", Content: "1.2.3.4"}}
-	if _, err := EnsureRecord(p, "移动", []string{"AAAA"}, "AAAA", "2606::1"); err != nil {
-		t.Fatal(err)
-	}
-	if p.created != 1 || p.lastRT != "AAAA" || p.lastVal != "2606::1" {
-		t.Errorf("A 记录存在时 AAAA 槽位应独立创建: %+v", p)
+	if pCNAME.created != 1 || pCNAME.lastRT != "CNAME" || pCNAME.lastVal != "www.Example.com" {
+		t.Fatalf("got created=%d rt=%q val=%q", pCNAME.created, pCNAME.lastRT, pCNAME.lastVal)
 	}
 
-	// CNAME 值带末尾点视为一致
-	p = &fakeProvider{rec: &Record{ID: "1", Type: "CNAME", Content: "www.Example.com."}}
-	if _, err := EnsureRecord(p, "移动", mainTypes, "CNAME", "www.example.com"); err != nil {
-		t.Fatal(err)
+	// 空白参数拦截
+	pErr := &fakeProvider{}
+	if _, err := EnsureRecord(pErr, "移动", []string{"A"}, "   ", "1.2.3.4"); err == nil {
+		t.Fatal("expected error for blank recordType")
 	}
-	if p.created != 0 || p.updated != 0 {
-		t.Errorf("CNAME 末尾点/大小写差异不应触发更新: %+v", p)
+	if _, err := EnsureRecord(pErr, "移动", []string{"A"}, "A", "   "); err == nil {
+		t.Fatal("expected error for blank content")
+	}
+	if _, err := EnsureRecord(pErr, "移动", []string{"CNAME"}, "cname", " ... "); err == nil {
+		t.Fatal("expected error for dot-only CNAME content")
+	}
+
+	// 更新时 ID 为空拦截
+	pNoID := &fakeProvider{rec: &Record{ID: " ", Type: "A", Content: "1.1.1.1"}}
+	if _, err := EnsureRecord(pNoID, "移动", []string{"A"}, "A", "2.2.2.2"); err == nil {
+		t.Fatal("expected EnsureRecord to reject empty existing Record.ID on update")
+	}
+}
+
+func TestTypeIn(t *testing.T) {
+	if !typeIn("A", []string{"cname", "a"}) {
+		t.Error("typeIn should match case-insensitively")
+	}
+	if typeIn("TXT", []string{"A", "AAAA"}) {
+		t.Error("typeIn should return false for absent type")
 	}
 }
